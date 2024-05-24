@@ -18,12 +18,12 @@ class Entity:
             self.facing = direction
     
     def move(self, x: int, y: int):
-        self.pos.x, self.pos.y = self.pos.x + x, self.pos.y + y
-        if y > 0:
+        self.pos.x, self.pos.y = self.pos.x - x, self.pos.y + y
+        if x > 0:
             self.rotate('N')
-        elif y < 0:
-            self.rotate('S')
-        elif x > 0:
-            self.rotate('E')
         elif x < 0:
+            self.rotate('S')
+        elif y > 0:
+            self.rotate('E')
+        elif y < 0:
             self.rotate('W')
