@@ -11,8 +11,19 @@ class Entity:
         dirs = ['N', 'E', 'S', 'W']
 
         if direction == 'CW':
-           self.facing = dirs[(dirs.index(self.facing) + 1) % 4]
+            self.facing = dirs[(dirs.index(self.facing) + 1) % 4]
         elif direction == 'CCW':
-           self.facing = dirs[(dirs.index(self.facing) - 1) % 4]
+            self.facing = dirs[(dirs.index(self.facing) - 1) % 4]
         elif direction in dirs:
             self.facing = direction
+    
+    def move(self, x: int, y: int):
+        self.pos.x, self.pos.y = self.pos.x + x, self.pos.y + y
+        if y > 0:
+            self.rotate('N')
+        elif y < 0:
+            self.rotate('S')
+        elif x > 0:
+            self.rotate('E')
+        elif x < 0:
+            self.rotate('W')
