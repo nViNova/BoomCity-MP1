@@ -3,8 +3,6 @@ import pyxelgrid as pg
 from dataclasses import dataclass
 from typing import Literal
 from point import Point
-from typing import TypeVar
-from time import sleep
 
 SCREEN_WIDTH = 256
 SCREEN_HEIGHT = 256
@@ -13,8 +11,6 @@ ROWS = 11
 COLS = 11
 DIM = 16
 FPS = 60
-
-
 
 stage: list[list[int]] = [[2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
                         [2, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0],
@@ -28,13 +24,15 @@ stage: list[list[int]] = [[2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
                         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
                         [0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2]]
 
-
-
 class Entity:
 
     def __init__(self, pos: Point, facing: Literal['N', 'E', 'S', 'W']):
         self.pos = pos
         self.facing = facing
+
+    @property
+    def _pos(self) -> tuple[int, int]:
+        return (self.pos.x, self.pos.y)
     
     def rotate(self, direction: Literal['N', 'E', 'S', 'W', 'CW', 'CCW']) -> None:
         dirs = ['N', 'E', 'S', 'W']
@@ -77,13 +75,9 @@ class Tank(Entity):
 
 class Bullet(Entity):
 
-    def __init__(self, pos: Point, facing: str):
-        self.speed: int = 1
-        self.pos = pos
-        self.facing = facing
-        self.is_alive: bool = True
-        self.test = 0
-        print('test')
+    def __init__(self, pos: Point, facing: Literal['N', 'E', 'S', 'W']):
+        self.counter = 0
+        super().__init__(pos, facing)
 
     def forward(self):
         if self.facing == 'N':
@@ -94,18 +88,6 @@ class Bullet(Entity):
             self.move(0, -1)
         elif self.facing == 'E':
             self.move(0, 1)
-        print(self.pos)
-
-    def update(self):
-        if self.test > 300:
-            self.forward()
-            self.test = 0
-        else:
-            self.test += 1
-            print(self.test)
-    
-    def draw(self):
-        px.blt(x + 1, y + 1, 0, 16, 16, DIM, DIM, 11)
 
 @dataclass
 class Tile:
@@ -122,13 +104,12 @@ class MyGame(pg.PyxelGrid[State]):
 
     def __init__(self):
         self.stage = stage
-        super().__init__(r=ROWS, c=COLS, dim=DIM, layerc=2)  # 5 rows, 7 columns, cell side length 10 pixels
+        super().__init__(r=ROWS, c=COLS, dim=DIM)
 
     def init(self) -> None:
         self.new_game()
         px.mouse(True)
         px.load("main.pyxres")
-        # called once at initialization time
 
     def update(self) -> None:
         if px.btnp(px.KEY_W):
@@ -141,40 +122,52 @@ class MyGame(pg.PyxelGrid[State]):
             self.moves(-1, 0)
 
         if px.btnp(px.KEY_Q):
-            print(self.mouse_cell())
+            print(self[self.mouse_cell()], self.mouse_cell())
 
         if px.btnp(px.KEY_SPACE):
-            self.shoot()
+            if not self.bullet and self.player.ammo > 0:
+                if self.is_walkable(self.player.front()):
+                    self.player.ammo -= 1
+                    self.bullet = Bullet(self.player.front(), self.player.facing)
+
+        if self.bullet:
+            if self.bullet.counter >= 4:
+                self.shoot()
+                if self.bullet:
+                    self.bullet.counter = 0
+            else:
+                self.bullet.counter += 1
 
 
-    def walkable(self, point: Point) -> bool:
+    def is_walkable(self, point: Point) -> bool:
         return self.in_bounds(point.x, point.y) and self[point.x, point.y] in movable
     
     def shoot(self) -> None:
-        if self.walkable(self.player.front()):
-            self.bullet = Bullet(self.player.front(), self.player.facing)
-            while True:
-                if not self.in_bounds(self.bullet.front().x, self.bullet.front().y):
-                    self[self.bullet.pos.x, self.bullet.pos.y] = State(Tile('Empty'))
-                    self.bullet = None
-                    break
-                elif self[self.bullet.front().x, self.bullet.front().y] == State(Tile('Wall')):
-                    self[self.bullet.pos.x, self.bullet.pos.y] = State(Tile('Empty'))
-                    self[self.bullet.front().x, self.bullet.front().y] = State(Tile('Empty'))
-                    self.bullet = None
-                    break
-                elif self.walkable(self.bullet.front()):
-                    self[self.bullet.pos.x, self.bullet.pos.y] = State(Tile('Empty'))
-                    self.bullet.update()
-                    self[self.bullet.pos.x, self.bullet.pos.y] = State(self.bullet)
-                    self.draw_cell(self.bullet.pos.x, self.bullet.pos.y, self.x(self.bullet.pos.x), self.y(self.bullet.pos.y))
-                    print("s",self[self.bullet.pos.x, self.bullet.pos.y])
+        if self.bullet:
+            FrontTile = (self.bullet.front().x, self.bullet.front().y)
+            if not self.in_bounds(*FrontTile):
+                self[self.bullet.pos.x, self.bullet.pos.y] = State(Tile('Empty'))
+                self.bullet = None
+            elif self[FrontTile] == State(Tile('Wall', 3)) or self[FrontTile] == State(Tile('Wall', 2)):
+                self[self.bullet.pos.x, self.bullet.pos.y] = State(Tile('Empty'))
+                wall = self[FrontTile]
+                self[FrontTile] = State(Tile('Wall', wall.content.health - 1))
+                self.bullet = None
+            elif self[FrontTile] == State(Tile('Wall', 1)):
+                self[self.bullet.pos.x, self.bullet.pos.y] = State(Tile('Empty'))
+                self[FrontTile] = State(Tile('Empty'))
+                self.bullet = None
+            elif self.is_walkable(self.bullet.front()):
+                self[self.bullet.pos.x, self.bullet.pos.y] = State(Tile('Empty'))
+                self.bullet.forward()
+                self[self.bullet.pos.x, self.bullet.pos.y] = State(self.bullet)
+
 
     def moves(self, y: int, x: int) -> None:
 
         new_pos_x, new_pos_y = self.player.pos.x - x, self.player.pos.y + y
 
-        if self.walkable(Point(new_pos_x, new_pos_y)):
+        if self.is_walkable(Point(new_pos_x, new_pos_y)):
             self[self.player.pos.x, self.player.pos.y] = State(Tile('Empty'))          
             self.player.move(x, y)
             self[self.player.pos.x, self.player.pos.y] = State(self.player)
@@ -193,7 +186,7 @@ class MyGame(pg.PyxelGrid[State]):
                     self.player = Tank(Point(i, j), 'N')
                     self[i, j] = State(self.player)
                 if self.stage[i][j] == 2:
-                    self[i, j] = State(Tile('Wall'))
+                    self[i, j] = State(Tile('Wall', health = 3))
         
     def draw_cell(self, i: int, j: int, x: int, y: int) -> None:
 
@@ -206,12 +199,20 @@ class MyGame(pg.PyxelGrid[State]):
                 px.blt(x + 1, y + 1, 0, 16, 0, DIM, DIM, 11)
             if self.player.facing == 'E':
                 px.blt(x + 1, y + 1, 0, 48, 0, DIM, DIM, 11)
+            px.text(x, y, str(self.player.ammo), 7)
             
-        if self[i, j] == State(Tile('Wall')): #BLOCKAGE
+        if self[i, j] == State(Tile('Wall', health=3)): #BLOCKAGE health 3
+            px.blt(x + 1, y + 1, 0, 0, 16, DIM, DIM, 11)
+        
+        if self[i, j] == State(Tile('Wall', health=2)): #BLOCKAGE health 2
             px.blt(x + 1, y + 1, 0, 0, 16, DIM, DIM, 11)
 
-        if self[i, j] == State(self.bullet):
-            px.blt(x + 1, y + 1, 0, 16, 16, DIM, DIM, 11)
+        if self[i, j] == State(Tile('Wall', health=1)): #BLOCKAGE health 1
+            px.blt(x + 1, y + 1, 0, 0, 16, DIM, DIM, 11)
+
+        if self.bullet:
+            if self[i, j] == State(self.bullet):
+                px.blt(x + 1, y + 1, 0, 16, 16, DIM, DIM, 11)
 
     def pre_draw_grid(self) -> None:
         px.cls(0)
@@ -225,5 +226,4 @@ class MyGame(pg.PyxelGrid[State]):
 
 my_game = MyGame()
 
-# The keyword arguments are passed directly to pyxel.init
-my_game.run(title="My Game", fps=FPS)
+my_game.run(title="Boom City", fps=FPS)
