@@ -1,6 +1,6 @@
 import pyxel as px
 import pyxelgrid as pg
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 from point import Point
 
@@ -26,9 +26,11 @@ stage: list[list[int]] = [[2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 
 class Entity:
 
-    def __init__(self, pos: Point, facing: Literal['N', 'E', 'S', 'W']):
+    def __init__(self, pos: Point, facing: Literal['N', 'E', 'S', 'W'], health: int = 1):
         self.pos = pos
         self.facing = facing
+        self.health = health
+        self.alive: bool = True
 
     @property
     def _pos(self) -> tuple[int, int]:
@@ -66,11 +68,17 @@ class Entity:
         if self.facing == 'E':
             return Point(self.pos.x, self.pos.y + 1)
         return self.pos
-    
+
+    def damage(self, damage: int = 1):
+        if self.alive:
+            self.health -= damage
+            if self.health < 1:
+                self.alive = False
+  
 class Tank(Entity):
     def __init__(self, pos: Point, facing: Literal['N', 'E', 'S', 'W']):
-        self.powerups: list[int] = []
-        self.ammo: int = 3
+        self.powerups: list[int] = field(default_factory=list)
+        self.ammo: int = 10
         super().__init__(pos, facing)
 
 class Bullet(Entity):
@@ -91,16 +99,26 @@ class Bullet(Entity):
 
 @dataclass
 class Tile:
-    type: Literal['Empty', 'Wall']
-    health: int | None = None
+    type: Literal['Wall'] | None = None
+    health: int = 0
+
+    def damage(self, damage: int = 1):
+        if self.type == 'Wall':
+            self.health -= damage
+            if self.health < 1:
+                self.type = None
+
+class Powerup:
+    type: Literal['speed', 'health', 'bullet']
 
 @dataclass
-class State:
-    content: Bullet | Tank | Tile
+class CellState:
+    content: Entity | Tile = field(default_factory=Tile)
+    powerup: Powerup | None = None
 
-movable: list[State] = [State(Tile('Empty'))]
+movable: list[CellState] = [CellState(Tile())]
 
-class MyGame(pg.PyxelGrid[State]):
+class MyGame(pg.PyxelGrid[CellState]):
 
     def __init__(self):
         self.stage = stage
@@ -130,13 +148,9 @@ class MyGame(pg.PyxelGrid[State]):
                     self.player.ammo -= 1
                     self.bullet = Bullet(self.player.front(), self.player.facing)
 
-        if self.bullet:
-            if self.bullet.counter >= 4:
-                self.shoot()
-                if self.bullet:
-                    self.bullet.counter = 0
-            else:
-                self.bullet.counter += 1
+        self.update_bullet()
+
+        
 
 
     def is_walkable(self, point: Point) -> bool:
@@ -144,23 +158,50 @@ class MyGame(pg.PyxelGrid[State]):
     
     def shoot(self) -> None:
         if self.bullet:
-            FrontTile = (self.bullet.front().x, self.bullet.front().y)
-            if not self.in_bounds(*FrontTile):
-                self[self.bullet.pos.x, self.bullet.pos.y] = State(Tile('Empty'))
+            Current = (self.bullet.pos.x, self.bullet.pos.y)
+            Front = (self.bullet.front().x, self.bullet.front().y)
+
+            self[Current].content = Tile()
+
+
+            if not self.in_bounds(*Front):
                 self.bullet = None
-            elif self[FrontTile] == State(Tile('Wall', 3)) or self[FrontTile] == State(Tile('Wall', 2)):
-                self[self.bullet.pos.x, self.bullet.pos.y] = State(Tile('Empty'))
-                wall = self[FrontTile]
-                self[FrontTile] = State(Tile('Wall', wall.content.health - 1))
+
+            elif self[Front].content.health:
+                self[Front].content.damage()
                 self.bullet = None
-            elif self[FrontTile] == State(Tile('Wall', 1)):
-                self[self.bullet.pos.x, self.bullet.pos.y] = State(Tile('Empty'))
-                self[FrontTile] = State(Tile('Empty'))
-                self.bullet = None
-            elif self.is_walkable(self.bullet.front()):
-                self[self.bullet.pos.x, self.bullet.pos.y] = State(Tile('Empty'))
+
+            if self.bullet:  
                 self.bullet.forward()
-                self[self.bullet.pos.x, self.bullet.pos.y] = State(self.bullet)
+                self[Front].content = self.bullet
+
+
+            # if not self.in_bounds(*FrontTile):
+            #     self[self.bullet.pos.x, self.bullet.pos.y] = CellState(Tile('Empty'))
+            #     self.bullet = None
+            # elif self[FrontTile] == CellState(Tile('Wall', 3)) or self[FrontTile] == CellState(Tile('Wall', 2)):
+            #     self[self.bullet.pos.x, self.bullet.pos.y] = CellState(Tile('Empty'))
+            #     wall = self[FrontTile]
+            #     self[FrontTile].content.damage()
+            #     self.bullet = None
+            # elif self[FrontTile] == CellState(Tile('Wall', 1)):
+            #     self[self.bullet.pos.x, self.bullet.pos.y] = CellState(Tile('Empty'))
+            #     self[FrontTile] = CellState(Tile('Empty'))
+            #     self.bullet = None
+            # elif self.is_walkable(self.bullet.front()):
+            #     self[self.bullet.pos.x, self.bullet.pos.y] = CellState(Tile('Empty'))
+            #     self.bullet.forward()
+            #     self[self.bullet.pos.x, self.bullet.pos.y] = CellState(self.bullet)
+
+    def update_bullet(self):
+        if self.bullet:
+            if self.bullet.counter >= 1:
+                self.shoot()
+                if self.bullet:
+                    self.bullet.counter = 0
+            else:
+                self.bullet.counter += 1
+
 
 
     def moves(self, y: int, x: int) -> None:
@@ -168,9 +209,9 @@ class MyGame(pg.PyxelGrid[State]):
         new_pos_x, new_pos_y = self.player.pos.x - x, self.player.pos.y + y
 
         if self.is_walkable(Point(new_pos_x, new_pos_y)):
-            self[self.player.pos.x, self.player.pos.y] = State(Tile('Empty'))          
+            self[self.player.pos.x, self.player.pos.y] = CellState()          
             self.player.move(x, y)
-            self[self.player.pos.x, self.player.pos.y] = State(self.player)
+            self[self.player.pos.x, self.player.pos.y] = CellState(self.player)
 
     def new_game(self) -> None:
 
@@ -181,16 +222,16 @@ class MyGame(pg.PyxelGrid[State]):
         for i in range(len(self.stage)):
             for j in range(len(self.stage)):
                 if self.stage[i][j] == 0:
-                    self[i, j] = State(Tile('Empty'))
+                    self[i, j] = CellState()
                 if self.stage[i][j] == 1:
                     self.player = Tank(Point(i, j), 'N')
-                    self[i, j] = State(self.player)
+                    self[i, j] = CellState(self.player)
                 if self.stage[i][j] == 2:
-                    self[i, j] = State(Tile('Wall', health = 3))
+                    self[i, j] = CellState(Tile('Wall', health = 3))
         
     def draw_cell(self, i: int, j: int, x: int, y: int) -> None:
 
-        if self[i, j] == State(self.player): #PLAYER
+        if self[i, j] == CellState(self.player): #PLAYER
             if self.player.facing == 'N':
                 px.blt(x + 1, y + 1, 0, 0, 0, DIM, DIM, 11)
             if self.player.facing == 'S':
@@ -201,17 +242,17 @@ class MyGame(pg.PyxelGrid[State]):
                 px.blt(x + 1, y + 1, 0, 48, 0, DIM, DIM, 11)
             px.text(x, y, str(self.player.ammo), 7)
             
-        if self[i, j] == State(Tile('Wall', health=3)): #BLOCKAGE health 3
+        if self[i, j] == CellState(Tile('Wall', health=3)): #BLOCKAGE health 3
             px.blt(x + 1, y + 1, 0, 0, 16, DIM, DIM, 11)
         
-        if self[i, j] == State(Tile('Wall', health=2)): #BLOCKAGE health 2
+        if self[i, j] == CellState(Tile('Wall', health=2)): #BLOCKAGE health 2
             px.blt(x + 1, y + 1, 0, 0, 16, DIM, DIM, 11)
 
-        if self[i, j] == State(Tile('Wall', health=1)): #BLOCKAGE health 1
+        if self[i, j] == CellState(Tile('Wall', health=1)): #BLOCKAGE health 1
             px.blt(x + 1, y + 1, 0, 0, 16, DIM, DIM, 11)
 
         if self.bullet:
-            if self[i, j] == State(self.bullet):
+            if self[i, j] == CellState(self.bullet):
                 px.blt(x + 1, y + 1, 0, 16, 16, DIM, DIM, 11)
 
     def pre_draw_grid(self) -> None:
