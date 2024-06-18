@@ -17,11 +17,11 @@ FPS = 60
 STAGE: list[list[int]] = [[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
                         [2, 3, 0, 0, 0, 0, 0, 0, 0, 3, 2],
                         [2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2],
-                        [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+                        [2, 0, 4, 0, 0, 0, 0, 0, 4, 0, 2],
                         [2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2],
                         [2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2],
                         [2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2],
-                        [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+                        [2, 0, 5, 0, 0, 0, 0, 0, 6, 0, 2],
                         [2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2],
                         [2, 3, 0, 0, 0, 0, 0, 0, 0, 3, 2],
                         [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]]
@@ -33,6 +33,7 @@ class Entity:
         self.facing: Literal['N', 'E', 'S', 'W'] = facing
         self.health: int = health
         self.alive: bool = True
+        self.is_invulnerable_counter: int = 0
 
     @property
     def _pos(self) -> tuple[int, int]:
@@ -73,13 +74,13 @@ class Entity:
 
     def damage(self, damage: int = 1):
         if self.alive:
-            self.health -= damage
-            if self.health < 1:
-                self.alive = False
+            if not self.is_invulnerable_counter:
+                self.health -= damage
+                if self.health < 1:
+                    self.alive = False
   
 class Tank(Entity):
     def __init__(self, pos: Point, facing: Literal['N', 'E', 'S', 'W'], health: int = 3):
-        self.powerups: list[int] = field(default_factory=list)
         self.ammo: int = 10
         super().__init__(pos, facing, health)
 
@@ -115,14 +116,15 @@ class Tile:
 
 @dataclass
 class Powerup:
-    type: Literal['speed', 'health', 'bullet']
+    type: Literal['health', 'bullet', 'shield', 'win']
+    intensity: int = 1
 
 @dataclass
 class CellState:
     content: Entity | Tile = field(default_factory=Tile)
     powerup: Powerup | None = None
 
-MOVABLE: list[CellState] = [CellState(Tile())]
+MOVABLE: list[Tile] = [Tile()]
 
 class MyGame(pg.PyxelGrid[CellState]):
 
@@ -149,15 +151,19 @@ class MyGame(pg.PyxelGrid[CellState]):
             print(self[self.mouse_cell()], self.mouse_cell())
         if px.btnp(px.KEY_P):
             print(self.enemies)
+        if px.btnp(px.KEY_1):
+            for enemy in self.enemies:
+                self.enemy_shoot(enemy)
 
         if px.btnp(px.KEY_SPACE):
             self.shoot()
 
         self.update_projectiles()
         self.update_enemies()
+        self.update_player()
 
     def is_walkable(self, point: Point) -> bool:
-        return self.in_bounds(point.x, point.y) and self[point.x, point.y] in MOVABLE
+        return self.in_bounds(point.x, point.y) and self[point.x, point.y].content in MOVABLE
     
     def shoot(self) -> None:
         if not self.bullet and self.player.ammo > 0:
@@ -242,6 +248,13 @@ class MyGame(pg.PyxelGrid[CellState]):
                     self.enemies.remove(enemy)
                     self[enemy.pos.x, enemy.pos.y].content = Tile()
     
+    def update_player(self) -> None:
+        if not px.frame_count % FPS:
+            if self.player.is_invulnerable_counter:
+                print(self.player.is_invulnerable_counter, "seconds left of shield")
+                self.player.is_invulnerable_counter -= 1
+
+    
     def enemy_move(self, enemy: Tank) -> None:
         if not px.frame_count % FPS // 2:
             roll: int = randint(0, 10)
@@ -257,20 +270,31 @@ class MyGame(pg.PyxelGrid[CellState]):
                 self.enemy_shoot(enemy)
 
 
-    def attempt_move(self, y: int, x: int, entity: Entity) -> None:
+    def attempt_move(self, y: int, x: int, entity: Tank) -> None:
 
         new_pos_x, new_pos_y = entity.pos.x - x, entity.pos.y + y
 
         if self.is_walkable(Point(new_pos_x, new_pos_y)):
-            self[entity.pos.x, entity.pos.y] = CellState()          
+            if entity is self.player:
+                if powerup := self[new_pos_x, new_pos_y].powerup:
+                    if powerup.type == 'bullet':
+                        entity.ammo += powerup.intensity
+                    if powerup.type == 'health':
+                        entity.health += powerup.intensity
+                    if powerup.type == 'shield':
+                        entity.is_invulnerable_counter += powerup.intensity
+                    self[new_pos_x, new_pos_y].powerup = None
+            self[entity.pos.x, entity.pos.y].content = Tile()     
             entity.move(x, y)
-            self[entity.pos.x, entity.pos.y] = CellState(entity)
+            self[entity.pos.x, entity.pos.y].content = entity
+        
 
     def new_game(self, stage: list[list[int]]) -> None:
 
         self.bullet: Bullet | None = None
         self.enemies: list[Tank] = []
         self.projectiles: list[Bullet] = []
+        self.powerups: list[Powerup] = []
 
         for i in range(len(stage)):
             for j in range(len(stage)):
@@ -284,6 +308,15 @@ class MyGame(pg.PyxelGrid[CellState]):
                 if stage[i][j] == 3:
                     self.enemies.append(enemy := Tank(Point(i, j), 'N'))
                     self[i, j] = CellState(enemy)
+                if stage[i][j] == 4:
+                    self.powerups.append(powerup := Powerup('bullet', 3))
+                    self[i, j] = CellState(Tile(), powerup)
+                if stage[i][j] == 5:
+                    self.powerups.append(powerup := Powerup('shield', 10))
+                    self[i, j] = CellState(Tile(), powerup)
+                if stage[i][j] == 6:
+                    self.powerups.append(powerup := Powerup('health', 3))
+                    self[i, j] = CellState(Tile(), powerup)
         
     def draw_cell(self, i: int, j: int, x: int, y: int) -> None:
 
@@ -323,6 +356,17 @@ class MyGame(pg.PyxelGrid[CellState]):
         
         if (projectile := self[i, j].content) in self.projectiles:
             px.blt(x + 1, y + 1, 0, 16, 16, DIM, DIM, 11)
+        
+        if (powerup := self[i, j].powerup) in self.powerups:
+            if powerup.type == 'bullet':
+                px.blt(x + 1, y + 1, 0, 16, 16, DIM, DIM, 11)
+            elif powerup.type == 'health':
+                px.rect(x + 1, y + 1, 8, 8, 17)
+            elif powerup.type == 'shield':
+                px.rect(x + 1, y + 1, 8, 8, 10)
+
+
+
 
 
     def pre_draw_grid(self) -> None:
