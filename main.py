@@ -330,7 +330,10 @@ class MyGame(pg.PyxelGrid[CellState]):
             if self.player.facing == 'E':
                 px.blt(x + 1, y + 1, 0, 48, 0, DIM, DIM, 11)
             px.text(x, y, str(self.player.ammo), 7)
-        
+            px.text(x + 16, y, str(self.player.health), 7)
+            if self.player.is_invulnerable_counter:
+                px.text(x + 8, y + 8, str(self.player.is_invulnerable_counter), 7)
+
         if (enemy := self[i, j].content) in self.enemies:
             if enemy.facing == 'N':
                 px.blt(x + 1, y + 1, 0, 0, 0, DIM, DIM, 11)
