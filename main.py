@@ -4,27 +4,31 @@ from dataclasses import dataclass, field
 from typing import Literal
 from point import Point
 from random import randint
+import json
 
+# Read the JSON file
+with open('stage_data.json', 'r') as file:
+    TRY_STAGE = json.load(file)
 
 SCREEN_WIDTH = 256
 SCREEN_HEIGHT = 256
+
+SCENE_TITLE = 0
+SCENE_PLAY = 1
+SCENE_GAMEOVER = 2
+SCENE_STAGE_CLEAR = 3
+
+CURR_SCORE = 0
+CURR_LIVES = 3
+CURR_STAGE = 1
 
 ROWS = 11
 COLS = 11
 DIM = 16
 FPS = 60
 
-STAGE: list[list[int]] = [[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2],
-                        [2, 3, 0, 0, 0, 0, 0, 0, 0, 3, 2],
-                        [2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2],
-                        [2, 0, 4, 0, 0, 0, 0, 0, 4, 0, 2],
-                        [2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2],
-                        [2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2],
-                        [2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2],
-                        [2, 0, 5, 0, 0, 0, 0, 0, 6, 0, 2],
-                        [2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2],
-                        [2, 3, 0, 0, 0, 0, 0, 0, 0, 3, 2],
-                        [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]]
+STAGE: list[list[int]] = TRY_STAGE['STAGE'][CURR_STAGE - 1]['stage']
+
 
 class Entity:
 
@@ -75,13 +79,14 @@ class Entity:
     def damage(self, damage: int = 1):
         if self.alive:
             if not self.is_invulnerable_counter:
+
                 self.health -= damage
                 if self.health < 1:
                     self.alive = False
   
 class Tank(Entity):
-    def __init__(self, pos: Point, facing: Literal['N', 'E', 'S', 'W'], health: int = 3):
-        self.ammo: int = 10
+    def __init__(self, pos: Point, facing: Literal['N', 'E', 'S', 'W'], health: int = 3, ammo: int = 10):
+        self.ammo: int = ammo
         super().__init__(pos, facing, health)
 
     def __repr__(self) -> str:
@@ -129,7 +134,12 @@ MOVABLE: list[Tile] = [Tile()]
 class MyGame(pg.PyxelGrid[CellState]):
 
     def __init__(self):
-        self.stage = STAGE
+        self.current_stage = CURR_STAGE
+        self.score = CURR_SCORE
+        self.stage: list[list[int]] = TRY_STAGE['STAGE'][self.current_stage - 1]['stage']
+        self.scene = SCENE_TITLE
+        self.player = None
+        
         super().__init__(r=ROWS, c=COLS, dim=DIM)
 
     def init(self) -> None:
@@ -138,13 +148,24 @@ class MyGame(pg.PyxelGrid[CellState]):
         px.load("main.pyxres")
 
     def update(self) -> None:
-        if px.btnp(px.KEY_W):
+        if self.scene == SCENE_TITLE:
+            self.update_title_scene()
+
+        if self.player.health == 0:
+            self.scene = SCENE_GAMEOVER
+            self.update_gameover_scene()
+
+        if len(self.enemies) == 0:
+            self.scene = SCENE_STAGE_CLEAR
+            self.update_next_stage()
+
+        if px.btnp(px.KEY_W) or px.btnp(px.KEY_UP):
             self.attempt_move(0, 1, self.player)
-        if px.btnp(px.KEY_S):
+        if px.btnp(px.KEY_S) or px.btnp(px.KEY_DOWN):
             self.attempt_move(0, -1, self.player)
-        if px.btnp(px.KEY_D):
+        if px.btnp(px.KEY_D) or px.btnp(px.KEY_RIGHT):
             self.attempt_move(1, 0, self.player)
-        if px.btnp(px.KEY_A):
+        if px.btnp(px.KEY_A) or px.btnp(px.KEY_LEFT):
             self.attempt_move(-1, 0, self.player)
 
         if px.btnp(px.KEY_Q):
@@ -171,7 +192,7 @@ class MyGame(pg.PyxelGrid[CellState]):
                 self.bullet = Bullet(self.player.front(), self.player.facing)
             elif self.in_bounds(self.player.front().x, self.player.front().y):
                 self[self.player.front().x, self.player.front().y].content.damage()
-            
+
             self.player.ammo -= 1
 
     
@@ -192,6 +213,12 @@ class MyGame(pg.PyxelGrid[CellState]):
             self[Current].content = Tile()
 
             if not self.in_bounds(*Front):
+                self.bullet = None
+
+            #check if bullet hits an enemy
+            elif self[Front].content in self.enemies:
+                self.score += 50
+                self[Front].content.damage()
                 self.bullet = None
 
             elif self[Front].content.health:
@@ -301,8 +328,11 @@ class MyGame(pg.PyxelGrid[CellState]):
                 if stage[i][j] == 0:
                     self[i, j] = CellState()
                 if stage[i][j] == 1:
-                    self.player = Tank(Point(i, j), 'N')
-                    self[i, j] = CellState(self.player)
+                    if self.player:
+                        self[i, j] = CellState(Tank(Point(i, j), 'N', self.player.health, self.player.ammo))
+                    else:
+                        self.player = Tank(Point(i, j), 'N')
+                        self[i, j] = CellState(self.player)
                 if stage[i][j] == 2:
                     self[i, j] = CellState(Tile('Wall', health = 3))
                 if stage[i][j] == 3:
@@ -317,56 +347,98 @@ class MyGame(pg.PyxelGrid[CellState]):
                 if stage[i][j] == 6:
                     self.powerups.append(powerup := Powerup('health', 3))
                     self[i, j] = CellState(Tile(), powerup)
-        
+
+    #for title and gameover scenes
+    def draw_next_stage(self) -> None:
+        txt: str = f"STAGE {self.current_stage} CLEARED"
+        px.text(64, 50, txt, 7)
+
+        px.text(64, 70, f"SCORE: {self.score}", 7)
+        px.text(40, 126, "PRESS --ENTER-- to CONTINUE", 15)
+
+    def draw_title_scene(self) -> None:
+        px.text(64, 50, "BATTLE CITY", 7)
+        px.text(43, 126, "PRESS --ENTER-- to PLAY", 15,)
+    
+    def draw_gameover_scene(self) -> None:
+        px.text(66, 50, "GAME OVER", 8)
+        px.text(40, 126, "PRESS --N-- to PLAY AGAIN", 13)
+
+    def update_gameover_scene(self) -> None:
+        if px.btnp(px.KEY_N):
+            self.scene = SCENE_TITLE
+            self.new_game(self.stage)
+
+    def update_title_scene(self):
+        if px.btnp(px.KEY_RETURN):
+            self.scene = SCENE_PLAY
+
+    def update_next_stage(self) -> None:
+        if px.btnp(px.KEY_RETURN):
+            self.current_stage += 1
+            self.new_game(TRY_STAGE['STAGE'][self.current_stage - 1]['stage'])
+            self.scene = SCENE_PLAY
+    
+    #this is where the game updates
     def draw_cell(self, i: int, j: int, x: int, y: int) -> None:
+        if self.scene == SCENE_TITLE:
+            self.draw_title_scene()
 
-        if self[i, j].content == self.player: #PLAYER
-            if self.player.facing == 'N':
-                px.blt(x + 1, y + 1, 0, 0, 0, DIM, DIM, 11)
-            if self.player.facing == 'S':
-                px.blt(x + 1, y + 1, 0, 32, 0, DIM, DIM, 11)
-            if self.player.facing == 'W':
-                px.blt(x + 1, y + 1, 0, 16, 0, DIM, DIM, 11)
-            if self.player.facing == 'E':
-                px.blt(x + 1, y + 1, 0, 48, 0, DIM, DIM, 11)
-            px.text(x, y, str(self.player.ammo), 7)
-            px.text(x + 16, y, str(self.player.health), 7)
-            if self.player.is_invulnerable_counter:
-                px.text(x + 8, y + 8, str(self.player.is_invulnerable_counter), 7)
+        if self.scene == SCENE_GAMEOVER:
+            self.current_stage += 1
+            self.draw_gameover_scene()
 
-        if (enemy := self[i, j].content) in self.enemies:
-            if enemy.facing == 'N':
-                px.blt(x + 1, y + 1, 0, 0, 0, DIM, DIM, 11)
-            if enemy.facing == 'S':
-                px.blt(x + 1, y + 1, 0, 32, 0, DIM, DIM, 11)
-            if enemy.facing == 'W':
-                px.blt(x + 1, y + 1, 0, 16, 0, DIM, DIM, 11)
-            if enemy.facing == 'E':
-                px.blt(x + 1, y + 1, 0, 48, 0, DIM, DIM, 11)
+        if self.scene == SCENE_STAGE_CLEAR:
+            self.draw_next_stage()
+
+        elif self.scene == SCENE_PLAY:
+            if self[i, j].content == self.player: #PLAYER
+                if self.player.facing == 'N':
+                    px.blt(x + 1, y + 1, 0, 0, 0, DIM, DIM, 11)
+                if self.player.facing == 'S':
+                    px.blt(x + 1, y + 1, 0, 32, 0, DIM, DIM, 11)
+                if self.player.facing == 'W':
+                    px.blt(x + 1, y + 1, 0, 16, 0, DIM, DIM, 11)
+                if self.player.facing == 'E':
+                    px.blt(x + 1, y + 1, 0, 48, 0, DIM, DIM, 11)
+                px.text(x, y, str(self.player.ammo), 7)
+                px.text(x + 16, y, str(self.player.health), 7)
+                if self.player.is_invulnerable_counter:
+                    px.text(x + 8, y + 8, str(self.player.is_invulnerable_counter), 7)
+
+            if (enemy := self[i, j].content) in self.enemies:
+                if enemy.facing == 'N':
+                    px.blt(x + 1, y + 1, 0, 0, 0, DIM, DIM, 11)
+                if enemy.facing == 'S':
+                    px.blt(x + 1, y + 1, 0, 32, 0, DIM, DIM, 11)
+                if enemy.facing == 'W':
+                    px.blt(x + 1, y + 1, 0, 16, 0, DIM, DIM, 11)
+                if enemy.facing == 'E':
+                    px.blt(x + 1, y + 1, 0, 48, 0, DIM, DIM, 11)
+                
+            if self[i, j] == CellState(Tile('Wall', health=3)): #BLOCKAGE health 3
+                px.blt(x + 1, y + 1, 0, 0, 16, DIM, DIM, 11)
             
-        if self[i, j] == CellState(Tile('Wall', health=3)): #BLOCKAGE health 3
-            px.blt(x + 1, y + 1, 0, 0, 16, DIM, DIM, 11)
-        
-        if self[i, j] == CellState(Tile('Wall', health=2)): #BLOCKAGE health 2
-            px.blt(x + 1, y + 1, 0, 0, 16, DIM, DIM, 11)
+            if self[i, j] == CellState(Tile('Wall', health=2)): #BLOCKAGE health 2
+                px.blt(x + 1, y + 1, 0, 0, 16, DIM, DIM, 11)
 
-        if self[i, j] == CellState(Tile('Wall', health=1)): #BLOCKAGE health 1
-            px.blt(x + 1, y + 1, 0, 0, 16, DIM, DIM, 11)
+            if self[i, j] == CellState(Tile('Wall', health=1)): #BLOCKAGE health 1
+                px.blt(x + 1, y + 1, 0, 0, 16, DIM, DIM, 11)
 
-        if self.bullet:
-            if self[i, j].content == self.bullet:
+            if self.bullet:
+                if self[i, j].content == self.bullet:
+                    px.blt(x + 1, y + 1, 0, 16, 16, DIM, DIM, 11)
+            
+            if (projectile := self[i, j].content) in self.projectiles:
                 px.blt(x + 1, y + 1, 0, 16, 16, DIM, DIM, 11)
-        
-        if (projectile := self[i, j].content) in self.projectiles:
-            px.blt(x + 1, y + 1, 0, 16, 16, DIM, DIM, 11)
-        
-        if (powerup := self[i, j].powerup) in self.powerups:
-            if powerup.type == 'bullet':
-                px.blt(x + 1, y + 1, 0, 16, 16, DIM, DIM, 11)
-            elif powerup.type == 'health':
-                px.rect(x + 1, y + 1, 8, 8, 17)
-            elif powerup.type == 'shield':
-                px.rect(x + 1, y + 1, 8, 8, 10)
+            
+            if (powerup := self[i, j].powerup) in self.powerups:
+                if powerup.type == 'bullet':
+                    px.blt(x + 1, y + 1, 0, 16, 16, DIM, DIM, 11)
+                elif powerup.type == 'health':
+                    px.rect(x + 1, y + 1, 8, 8, 17)
+                elif powerup.type == 'shield':
+                    px.rect(x + 1, y + 1, 8, 8, 10)
 
 
 
